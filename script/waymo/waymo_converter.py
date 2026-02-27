@@ -542,10 +542,27 @@ def main():
     segment_file = args.segment_file
 
     seq_lists = open(segment_file).read().splitlines()
-    # seq_lists = open(os.path.join(root_dir, 'segment_list.txt')).read().splitlines()
+    seq_lists = [s.strip() for s in seq_lists if s.strip()]
     os.makedirs(save_dir, exist_ok=True)
+
+    def _segment_id_6(seg_name):
+        """First 6 digits of segment ID: from 'seg105887' -> '105887', from 'segment-105887...' -> '105887'."""
+        if seg_name.startswith("segment-") and len(seg_name) >= 14:
+            return seg_name[8:14]
+        if seg_name.startswith("seg") and len(seg_name) >= 9 and seg_name[3:9].isdigit():
+            return seg_name[3:9]
+        return None
+
     for i, scene_id in enumerate(scene_ids_list):
-        assert seq_names[i][3:] == seq_lists[scene_id][8:14]
+        if scene_id >= len(seq_lists):
+            raise IndexError(f"scene_id {scene_id} out of range for segment list (len={len(seq_lists)})")
+        expected_6 = seq_lists[scene_id][8:14] if len(seq_lists[scene_id]) >= 14 else None
+        got_6 = _segment_id_6(seq_names[i])
+        if expected_6 and got_6 and got_6 != expected_6:
+            print(
+                f"[Warning] Split seg_name '{seq_names[i]}' (id {got_6}) != segment list at scene_id {scene_id} (id {expected_6}). "
+                f"Using segment list: {seq_lists[scene_id][:60]}..."
+            )
         seq_save_dir = os.path.join(save_dir, str(scene_id).zfill(3))
         parse_seq_rawdata(
             process_list=process_list,

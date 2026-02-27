@@ -21,6 +21,9 @@ from lib.config import cfg
 from lib.utils.loss_utils import ssim, psnr
 from lib.utils.lpipsPyTorch import lpips
 from lib.datasets.dataset import Dataset
+from lib.models.street_gaussian_model import StreetGaussianModel
+from lib.models.scene import Scene
+from lib.models.street_gaussian_renderer import StreetGaussianRenderer
 
 
 def evaluate(split='test'):
@@ -35,13 +38,65 @@ def evaluate(split='test'):
         
     cam_infos = list(sorted(cam_infos, key=lambda x: x.id))
     
+    # Load model to get Gaussian count and measure memory usage
+    print("Loading model to get Gaussian statistics...")
+    gaussians = StreetGaussianModel(dataset.scene_info.metadata)
+    scene = Scene(gaussians=gaussians, dataset=dataset)
+    renderer = StreetGaussianRenderer()
+    
+    # Get total number of Gaussians by summing all components
+    total_gaussians = 0
+    if hasattr(gaussians, 'background') and gaussians.background is not None:
+        total_gaussians += gaussians.background.get_xyz.shape[0]
+    if hasattr(gaussians, 'obj_list'):
+        for obj_name in gaussians.obj_list:
+            if hasattr(gaussians, obj_name):
+                obj_model = getattr(gaussians, obj_name)
+                if hasattr(obj_model, 'get_xyz'):
+                    total_gaussians += obj_model.get_xyz.shape[0]
+    
+    print(f"Total Gaussians: {total_gaussians:,}")
+    
+    # Get memory usage during rendering (render one test image)
+    memory_used = 0.0
+    peak_memory = 0.0
+    if len(cam_infos) > 0 and torch.cuda.is_available():
+        # Clear cache and reset stats before measurement
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        initial_memory = torch.cuda.memory_allocated() / 1024**3  # GB
+        
+        test_camera = cam_infos[0]
+        # Set viewpoint camera for StreetGaussianModel
+        gaussians.viewpoint_camera = test_camera
+        gaussians._build_graph()
+        
+        # Measure memory before rendering (after building graph)
+        memory_after_graph = torch.cuda.memory_allocated() / 1024**3  # GB
+        
+        # Measure memory during rendering
+        with torch.no_grad():
+            _ = renderer.render(test_camera, gaussians)
+        torch.cuda.synchronize()
+        
+        peak_memory = torch.cuda.max_memory_allocated() / 1024**3  # GB
+        current_memory = torch.cuda.memory_allocated() / 1024**3  # GB
+        # Memory used is the peak memory during rendering
+        memory_used = peak_memory - initial_memory
+        
+        print(f"GPU Memory - Initial: {initial_memory:.2f} GB, After graph: {memory_after_graph:.2f} GB, Peak: {peak_memory:.2f} GB, Used: {memory_used:.2f} GB")
+    
     full_dict = {}
     per_view_dict = {}
     full_dict_polytopeonly = {}
     per_view_dict_polytopeonly = {}
     
     print(f"Scene: {scene_dir }")
-    full_dict[scene_dir] = {}
+    full_dict[scene_dir] = {
+        "num_gaussians": total_gaussians,
+        "gpu_memory_gb": memory_used,
+        "gpu_memory_peak_gb": peak_memory
+    }
     per_view_dict[scene_dir] = {}
     full_dict_polytopeonly[scene_dir] = {}
     per_view_dict_polytopeonly[scene_dir] = {}

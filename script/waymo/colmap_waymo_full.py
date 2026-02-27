@@ -135,11 +135,19 @@ def run_colmap_waymo(result):
     conn = sqlite3.connect(db)
     c = conn.cursor()
     c.execute('SELECT * FROM images')
-    result = c.fetchall()
-        
+    db_images = c.fetchall()
+    
+    # Map camera names to DB camera_ids
+    cam_to_db_camera_id = dict()
+    for row in db_images:
+        name = row[1]
+        db_cam_id = row[2]
+        cam = image_filename_to_cam(name)
+        cam_to_db_camera_id[cam] = db_cam_id
+
     out_fn = f'{colmap_dir}/id_names.txt'
     with open(out_fn, 'w') as f:
-        for i in result:
+        for i in db_images:
             f.write(str(i[0]) + ' ' + i[1] + '\n')
     f.close()
 
@@ -175,10 +183,11 @@ def run_colmap_waymo(result):
         id_ = id_names[i][0]
         name = id_names[i][1]
         cam = image_filename_to_cam(name)
+        db_cam_id = cam_to_db_camera_id[cam]
 
         f_w.write(f'{id_} ')
         f_w.write(' '.join([str(a) for a in out.tolist()] ) )
-        f_w.write(f' {cam} {name}')
+        f_w.write(f' {db_cam_id} {name}')
         f_w.write('\n\n')
     
     f_w.close()
@@ -187,6 +196,7 @@ def run_colmap_waymo(result):
     cameras_fn = os.path.join(model_dir, 'cameras.txt')
     with open(cameras_fn, 'w') as f:
         for unique_cam in unique_cams:
+            db_cam_id = cam_to_db_camera_id[unique_cam]
             camera_info = camera_infos[unique_cam]
             ixt = camera_info['ixt']
             img_w = camera_info['img_w']
@@ -195,7 +205,7 @@ def run_colmap_waymo(result):
             fy = ixt[1, 1]
             cx = ixt[0, 2]
             cy = ixt[1, 2]
-            f.write(f'{unique_cam} SIMPLE_PINHOLE {img_w} {img_h} {fx} {cx} {cy}')
+            f.write(f'{db_cam_id} SIMPLE_PINHOLE {img_w} {img_h} {fx} {cx} {cy}')
             f.write('\n')
 
     # update database

@@ -93,6 +93,9 @@ def make_cfg(cfg, args):
         cfg_.merge_from_list(args.opts[:index])
     except:
         cfg_.merge_from_list(args.opts)
+    # Command-line --mode overrides config (e.g. render.py --mode trajectory)
+    if getattr(args, 'mode', '') != '':
+        cfg_.mode = args.mode
 
     parse_cfg(cfg_, args)
     return cfg_

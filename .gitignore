@@ -7,3 +7,4 @@ diff_rasterization/diff_rast.egg-info
 diff_rasterization/dist
 tensorboard_3d
 screenshots
+ckpt/sam_vit_h_4b8939.pth

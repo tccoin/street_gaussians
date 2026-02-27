@@ -41,6 +41,7 @@ cfg.train.save_iterations = [7000, 30000]
 cfg.train.iterations = 30000
 cfg.train.quiet = False
 cfg.train.checkpoint_iterations = [30000]
+cfg.train.checkpoint_interval = 0  # save checkpoint every N steps (0 = only use checkpoint_iterations list)
 cfg.train.start_checkpoint = None
 cfg.train.importance_sampling = False
 
@@ -143,6 +144,8 @@ cfg.render.save_video = True
 cfg.render.save_image = True
 cfg.render.coord = 'world' # ['world', 'vehicle']
 cfg.render.concat_cameras = []
+cfg.render.camera_height_offset = 2.0  # meters to raise camera for offset trajectory
+cfg.render.camera_pitch_offset = -15.0  # degrees to rotate camera down (negative = look down)
 cfg.viewer = CN()
 cfg.viewer.frame_id = 0 # Select the frame_id (start from 0) to save for viewer
 
