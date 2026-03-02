@@ -130,7 +130,6 @@ def readWaymoFullInfo(path, images='images', split_train=-1, split_test=-1, **kw
             # obj_bound = Image.fromarray(obj_bound)
             guidance['obj_bound'] = Image.fromarray(obj_bounds[i])
 
-        # load lidar depth
         if load_lidar_depth:
             depth_path = os.path.join(lidar_depth_dir, f'{image_name}.npy')
             depth = np.load(depth_path, allow_pickle=True)

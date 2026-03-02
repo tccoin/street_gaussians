@@ -297,7 +297,9 @@ def generate_dataparser_outputs(
     
     image_dir = os.path.join(datadir, 'images')
     image_filenames_all = sorted(glob(os.path.join(image_dir, '*.png')))
-    num_frames_all = len(image_filenames_all) // 5
+    # Actual frame count from data (works for any camera subset; //5 only correct for 5 cams)
+    max_frame_in_data = max(image_filename_to_frame(os.path.basename(f)) for f in image_filenames_all) if image_filenames_all else -1
+    num_frames_all = max_frame_in_data + 1 if max_frame_in_data >= 0 else 0
     num_cameras = len(cameras)
     
     if selected_frames is None:
@@ -306,6 +308,9 @@ def generate_dataparser_outputs(
         selected_frames = [start_frame, end_frame]
     else:
         start_frame, end_frame = selected_frames[0], selected_frames[1]
+    # Clamp to actual frame range so config [0,198] on a 0-197 scene never requests 198
+    end_frame = min(end_frame, num_frames_all - 1) if num_frames_all > 0 else 0
+    start_frame = max(0, min(start_frame, end_frame))
     num_frames = end_frame - start_frame + 1
 
     # load calibration and ego pose

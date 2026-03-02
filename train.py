@@ -21,6 +21,49 @@ try:
 except ImportError:
     TENSORBOARD_FOUND = False
 
+from lib.visualizers.street_gaussian_visualizer import StreetGaussianVisualizer
+from render import offset_camera
+
+
+def render_trajectory_videos(scene: Scene, gaussians: StreetGaussianModel, renderer: StreetGaussianRenderer, iteration: int):
+    """Render two videos: original trajectory and offset (shift) trajectory. Saves to trajectory/ and trajectory_offset/."""
+    train_cams = scene.getTrainCameras()
+    test_cams = scene.getTestCameras()
+    cameras = list(sorted(train_cams + test_cams, key=lambda x: x.id))
+    if not cameras:
+        return
+    # Temporarily set render flags for video
+    save_image_prev = getattr(cfg.render, 'save_image', True)
+    save_video_prev = getattr(cfg.render, 'save_video', True)
+    cfg.render.save_image = False
+    cfg.render.save_video = True
+    height_offset = cfg.render.get('camera_height_offset', 2.0)
+    pitch_degrees = cfg.render.get('camera_pitch_offset', -15.0)
+    try:
+        with torch.no_grad():
+            # Original trajectory
+            save_dir_orig = os.path.join(cfg.model_path, 'trajectory', f'ours_{iteration}')
+            os.makedirs(save_dir_orig, exist_ok=True)
+            vis_orig = StreetGaussianVisualizer(save_dir_orig)
+            for camera in tqdm(cameras, desc=f'Render original traj iter={iteration}'):
+                result = renderer.render_all(camera, gaussians)
+                vis_orig.visualize(result, camera)
+            vis_orig.summarize()
+            # Shift (offset) trajectory
+            save_dir_shift = os.path.join(cfg.model_path, 'trajectory_offset', f'ours_{iteration}')
+            os.makedirs(save_dir_shift, exist_ok=True)
+            vis_shift = StreetGaussianVisualizer(save_dir_shift)
+            for camera in tqdm(cameras, desc=f'Render shift traj iter={iteration}'):
+                offset_cam = offset_camera(camera, height_offset=height_offset, pitch_degrees=pitch_degrees)
+                result = renderer.render_all(offset_cam, gaussians)
+                vis_shift.visualize(result, offset_cam)
+            vis_shift.summarize()
+        print(f"[ITER {iteration}] Trajectory videos saved to {save_dir_orig} and {save_dir_shift}")
+    finally:
+        cfg.render.save_image = save_image_prev
+        cfg.render.save_video = save_video_prev
+
+
 def training():
     training_args = cfg.train
     optim_args = cfg.optim
@@ -80,6 +123,11 @@ def training():
         mask = viewpoint_cam.guidance['mask'] if 'mask' in viewpoint_cam.guidance else torch.ones_like(gt_image[0:1]).bool()
         gt_image = gt_image.cuda(non_blocking=True) if not gt_image.is_cuda else gt_image
         mask = mask.cuda(non_blocking=True) if not mask.is_cuda else mask
+
+        # Optional guidance signals
+        lidar_depth = None
+        sky_mask = None
+        obj_bound = None
         if 'lidar_depth' in viewpoint_cam.guidance:
             lidar_depth = viewpoint_cam.guidance['lidar_depth']
             lidar_depth = lidar_depth.cuda(non_blocking=True) if not lidar_depth.is_cuda else lidar_depth
@@ -111,7 +159,7 @@ def training():
             scalar_dict['sky_loss'] = sky_loss.item()
             loss += optim_args.lambda_sky * sky_loss
         
-        if optim_args.lambda_reg > 0 and gaussians.include_obj and iteration >= optim_args.densify_until_iter:
+        if optim_args.lambda_reg > 0 and gaussians.include_obj and iteration >= optim_args.densify_until_iter and obj_bound is not None:
             render_pkg_obj = gaussians_renderer.render_object(viewpoint_cam, gaussians, parse_camera_again=False)
             image_obj, acc_obj = render_pkg_obj["rgb"], render_pkg_obj['acc']
             acc_obj = torch.clamp(acc_obj, min=1e-6, max=1.-1e-6)
@@ -215,12 +263,26 @@ def training():
             if iteration < training_args.iterations:
                 gaussians.update_optimizer()
 
-            if (iteration in training_args.checkpoint_iterations):
-                print("\n[ITER {}] Saving Checkpoint".format(iteration))
+            save_ckpt = iteration in training_args.checkpoint_iterations
+            if getattr(training_args, 'checkpoint_interval', 0) and iteration > 0:
+                save_ckpt = save_ckpt or (iteration % training_args.checkpoint_interval == 0)
+            if save_ckpt:
+                print("\n[ITER {}] Saving Checkpoint + point cloud".format(iteration))
+                # Save Gaussian state (for training / rendering)
                 state_dict = gaussians.save_state_dict(is_final=(iteration == training_args.iterations))
                 state_dict['iter'] = iteration
                 ckpt_path = os.path.join(cfg.trained_model_dir, f'iteration_{iteration}.pth')
                 torch.save(state_dict, ckpt_path)
+                # Save corresponding point cloud snapshot used by renderer (Scene in eval mode
+                # looks up cfg.point_cloud_dir/iteration_*/point_cloud.ply).
+                scene.save(iteration)
+
+            # Every N//5 steps render two videos: original traj + shift traj
+            interval = max(1, training_args.iterations // 5)
+            if iteration > 0 and iteration % interval == 0:
+                torch.cuda.empty_cache()
+                render_trajectory_videos(scene, gaussians, gaussians_renderer, iteration)
+                torch.cuda.empty_cache()
 
 
 

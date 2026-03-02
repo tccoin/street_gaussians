@@ -21,6 +21,7 @@ class BaseVisualizer():
         self.rgbs = []
         self.depths = []
         self.diffs = []
+        self.cams = []  # Track camera IDs for multi-camera video generation
         
         self.depth_visualize_func = lambda x: visualize_depth_numpy(x, cmap=cv2.COLORMAP_JET)[0][..., [2, 1, 0]]
         self.diff_visualize_func = lambda x: visualize_depth_numpy(x, cmap=cv2.COLORMAP_TURBO)[0][..., [2, 1, 0]]
@@ -36,6 +37,9 @@ class BaseVisualizer():
         if self.save_video:
             rgb = (rgb.detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
             self.rgbs.append(rgb)
+            # Track camera ID if available, otherwise use 0
+            cam_id = camera.meta.get('cam', 0) if hasattr(camera, 'meta') and 'cam' in camera.meta else 0
+            self.cams.append(cam_id)
             
         self.visualize_diff(result, camera)
         self.visualize_depth(result, camera)

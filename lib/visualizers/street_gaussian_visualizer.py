@@ -36,20 +36,20 @@ class StreetGaussianVisualizer():
         self.cams.append(camera.meta['cam'])
         name = camera.image_name
         
-        rgb = result['rgb']
-        rgb_bkgd = result['rgb_background']
-        rgb_obj = result['rgb_object']
-        acc_obj = result['acc_object']
+        rgb = torch.clamp(result['rgb'], 0.0, 1.0)
+        rgb_bkgd = torch.clamp(result['rgb_background'], 0.0, 1.0)
+        rgb_obj = torch.clamp(result['rgb_object'], 0.0, 1.0)
+        acc_obj = torch.clamp(result['acc_object'], 0.0, 1.0)
         
         if self.save_image:
             torchvision.utils.save_image(rgb, os.path.join(self.result_dir, f'{name}_rgb.png'))
             torchvision.utils.save_image(rgb_bkgd, os.path.join(self.result_dir, f'{name}_rgb_bkgd.png'))
             torchvision.utils.save_image(rgb_obj, os.path.join(self.result_dir, f'{name}_rgb_obj.png'))
             torchvision.utils.save_image(acc_obj.float(), os.path.join(self.result_dir, f'{name}_acc_obj.png'))
-            torchvision.utils.save_image(camera.original_image[:3], os.path.join(self.result_dir, f'{name}_gt.png'))
+            torchvision.utils.save_image(camera.original_image[:3].clamp(0.0, 1.0), os.path.join(self.result_dir, f'{name}_gt.png'))
     
         if self.save_video:
-            rgb_gt = (camera.original_image[:3].detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
+            rgb_gt = (camera.original_image[:3].clamp(0.0, 1.0).detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
             self.rgbs_gt.append(rgb_gt)
             rgb_bkgd = (rgb_bkgd.detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
             self.rgbs_bkgd.append(rgb_bkgd)
@@ -69,7 +69,7 @@ class StreetGaussianVisualizer():
     def visualize_novel_view(self, result, camera: Camera):
         self.cams.append(camera.meta['cam'])
         id = camera.id
-        rgb = result['rgb']
+        rgb = torch.clamp(result['rgb'], 0.0, 1.0)
         depth = result['depth']
         depth = depth.permute(1, 2, 0).detach().cpu().numpy() # [H, W, 1]
         # np.save(os.path.join(self.result_dir, f'{id}_depth.npy'), depth)
@@ -85,8 +85,8 @@ class StreetGaussianVisualizer():
                 
     def visualize_diff(self, result, camera: Camera):
         name = camera.image_name
-        rgb_gt = camera.original_image[:3]
-        rgb = result['rgb'].detach().cpu()
+        rgb_gt = torch.clamp(camera.original_image[:3], 0.0, 1.0)
+        rgb = torch.clamp(result['rgb'].detach().cpu(), 0.0, 1.0)
         
         if hasattr(camera, 'original_mask'):
             mask = camera.original_mask.bool()
