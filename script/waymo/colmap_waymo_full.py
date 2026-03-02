@@ -109,7 +109,8 @@ def run_colmap_waymo(result):
             cv2.imwrite(new_mask_filename, flip_mask)
     
     # https://colmap.github.io/faq.html#mask-image-regions
-    os.system(f'colmap feature_extractor \
+    os.system(f'env QT_QPA_PLATFORM=offscreen colmap feature_extractor \
+            --SiftExtraction.use_gpu 0 \
             --ImageReader.mask_path {mask_images_dir} \
             --ImageReader.camera_model SIMPLE_PINHOLE  \
             --ImageReader.single_camera_per_folder 1 \
@@ -256,12 +257,13 @@ def run_colmap_waymo(result):
     with open(rigid_config_path, "w+") as f:
         json.dump([cam_rigid], f, indent=4)   
 
-    os.system(f'colmap exhaustive_matcher \
+    os.system(f'env QT_QPA_PLATFORM=offscreen colmap exhaustive_matcher \
+            --SiftMatching.use_gpu 0 \
             --database_path {colmap_dir}/database.db')
 
     triangulated_dir = os.path.join(colmap_dir, 'triangulated/sparse/model')
     os.makedirs(triangulated_dir, exist_ok=True)
-    os.system(f'colmap point_triangulator \
+    os.system(f'env QT_QPA_PLATFORM=offscreen colmap point_triangulator \
         --database_path {colmap_dir}/database.db \
         --image_path {train_images_dir} \
         --input_path {model_dir} \
@@ -280,7 +282,7 @@ def run_colmap_waymo(result):
     
     if cfg.data.use_colmap_pose:
         # May lead to unstable results when refining relative poses
-        os.system(f'colmap rig_bundle_adjuster \
+        os.system(f'env QT_QPA_PLATFORM=offscreen colmap rig_bundle_adjuster \
                 --input_path {triangulated_dir} \
                 --output_path {triangulated_dir} \
                 --rig_config_path {rigid_config_path} \
