@@ -110,7 +110,6 @@ def run_colmap_waymo(result):
     
     # https://colmap.github.io/faq.html#mask-image-regions
     os.system(f'env QT_QPA_PLATFORM=offscreen colmap feature_extractor \
-            --SiftExtraction.use_gpu 0 \
             --ImageReader.mask_path {mask_images_dir} \
             --ImageReader.camera_model SIMPLE_PINHOLE  \
             --ImageReader.single_camera_per_folder 1 \
@@ -268,7 +267,6 @@ def run_colmap_waymo(result):
         json.dump([cam_rigid], f, indent=4)   
 
     os.system(f'env QT_QPA_PLATFORM=offscreen colmap exhaustive_matcher \
-            --SiftMatching.use_gpu 0 \
             --database_path {colmap_dir}/database.db')
 
     triangulated_dir = os.path.join(colmap_dir, 'triangulated/sparse/model')
