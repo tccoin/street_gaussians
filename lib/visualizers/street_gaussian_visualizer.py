@@ -160,11 +160,23 @@ class StreetGaussianVisualizer():
                 
                 frames_concat_all = []
                 for i in range(num_frames):
-                    frames_concat = []
-                    for j in range(len(concat_cameras)):
-                        frames_concat.append(frames_cam_all[j][i])
-                    frames_concat = np.concatenate(frames_concat, axis=1)
-                    frames_concat_all.append(frames_concat)
+                    frames_concat = [frames_cam_all[j][i] for j in range(len(concat_cameras))]
+                    target_h = max(f.shape[0] for f in frames_concat)
+                    target_ndim = max(f.ndim for f in frames_concat)
+                    resized = []
+                    for f in frames_concat:
+                        if f.shape[0] != target_h:
+                            import cv2
+                            scale = target_h / f.shape[0]
+                            f = cv2.resize(f, (int(f.shape[1] * scale), target_h))
+                        # cv2.resize may squeeze single-channel dim; restore ndim
+                        while f.ndim < target_ndim:
+                            f = f[..., np.newaxis]
+                        # if some frames are RGB while others are 1-ch, broadcast to 3-ch
+                        if target_ndim == 3 and f.shape[-1] == 1:
+                            f = np.repeat(f, 3, axis=-1)
+                        resized.append(f)
+                    frames_concat_all.append(np.concatenate(resized, axis=1))
                 
                 if visualize_func is not None:
                     frames_concat_all = [visualize_func(frame) for frame in frames_concat_all]    
