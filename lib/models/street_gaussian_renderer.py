@@ -81,9 +81,25 @@ class StreetGaussianRenderer():
         override_color = None,
         parse_camera_again: bool = True,
     ):  
-        pc.set_visibility(include_list=['sky'])
-        if parse_camera_again: pc.parse_camera(viewpoint_camera)
-        result = self.render_kernel(viewpoint_camera, pc, convert_SHs_python, compute_cov3D_python, scaling_modifier, override_color)
+        if not pc.include_sky or pc.sky_cubemap is None:
+            raise ValueError("Sky rendering not available for this scene")
+
+        sky_color = pc.sky_cubemap(viewpoint_camera, acc=None)
+        if pc.use_color_correction:
+            sky_color = pc.color_correction(viewpoint_camera, sky_color, use_sky=True)
+        if cfg.mode != 'train':
+            sky_color = torch.clamp(sky_color, 0., 1.)
+
+        result = {
+            "rgb": sky_color,
+            "acc": torch.ones(
+                1,
+                int(viewpoint_camera.image_height),
+                int(viewpoint_camera.image_width),
+                device=sky_color.device,
+                dtype=sky_color.dtype,
+            ),
+        }
         return result
     
     def render(

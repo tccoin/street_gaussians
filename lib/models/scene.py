@@ -39,7 +39,7 @@ class Scene:
             print("Loading checkpoint at iteration {}".format(self.loaded_iter))
             checkpoint_path = os.path.join(cfg.trained_model_dir, f"iteration_{str(self.loaded_iter)}.pth")
             assert os.path.exists(checkpoint_path)
-            state_dict = torch.load(checkpoint_path)
+            state_dict = torch.load(checkpoint_path, weights_only=False)
             self.gaussians.load_state_dict(state_dict=state_dict)
             
     def save(self, iteration):
