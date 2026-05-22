@@ -446,9 +446,11 @@ def generate_dataparser_outputs(
     #     x = x.astype(np.uint8) * 255
     #     cv2.imwrite(f'obj_bounds/{i}.png', x)
     
-    # run colmap
+    # run colmap (skipped when use_colmap=False; downstream code in this
+    # file already handles a missing colmap pointcloud via try/except and
+    # falls back to a lidar-only initialisation).
     colmap_basedir = os.path.join(f'{cfg.model_path}/colmap')
-    if not os.path.exists(os.path.join(colmap_basedir, 'triangulated/sparse/model')):
+    if cfg.data.get('use_colmap', True) and not os.path.exists(os.path.join(colmap_basedir, 'triangulated/sparse/model')):
         from script.waymo.colmap_waymo_full import run_colmap_waymo
         run_colmap_waymo(result)
     
@@ -467,8 +469,15 @@ def generate_dataparser_outputs(
 
         print('initialize from sfm pointcloud')
         points_colmap_path = os.path.join(colmap_basedir, 'triangulated/sparse/model/points3D.bin')
-        points_colmap_xyz, points_colmap_rgb, points_colmap_error = read_points3D_binary(points_colmap_path)
-        points_colmap_rgb = points_colmap_rgb / 255.
+        if cfg.data.get('use_colmap', True) and os.path.exists(points_colmap_path):
+            points_colmap_xyz, points_colmap_rgb, points_colmap_error = read_points3D_binary(points_colmap_path)
+            points_colmap_rgb = points_colmap_rgb / 255.
+        else:
+            # No colmap pointcloud — downstream filter_colmap try/except will
+            # fall back to lidar-only background.
+            points_colmap_xyz = np.zeros((0, 3), dtype=np.float32)
+            points_colmap_rgb = np.zeros((0, 3), dtype=np.float32)
+            points_colmap_error = np.zeros((0,), dtype=np.float32)
                      
         print('initialize from lidar pointcloud')
         pointcloud_path = os.path.join(datadir, 'pointcloud.npz')

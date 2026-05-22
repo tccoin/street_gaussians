@@ -166,11 +166,16 @@ class GaussianModel(nn.Module):
         if cfg.mode == 'train':
             self.training_setup()
             if 'spatial_lr_scale' in state_dict:
-                self.spatial_lr_scale = state_dict['spatial_lr_scale'] 
+                self.spatial_lr_scale = state_dict['spatial_lr_scale']
             if 'denom' in state_dict:
-                self.denom = state_dict['denom'] 
+                self.denom = state_dict['denom']
             if 'max_radii2D' in state_dict:
-                self.max_radii2D = state_dict['max_radii2D'] 
+                self.max_radii2D = state_dict['max_radii2D']
+            else:
+                # state_dict(is_final=True) drops max_radii2D; reset it to match
+                # the loaded xyz so set_max_radii2D's mask-indexed write doesn't
+                # blow up after densification grew the gaussian count past init.
+                self.max_radii2D = torch.zeros((self._xyz.shape[0],), device="cuda")
             if 'xyz_gradient_accum' in state_dict:
                 self.xyz_gradient_accum = state_dict['xyz_gradient_accum']
             if 'active_sh_degree' in state_dict:
