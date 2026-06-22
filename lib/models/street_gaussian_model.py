@@ -221,7 +221,8 @@ class StreetGaussianModel(nn.Module):
         self.viewpoint_camera = camera
         
         # set background mask
-        self.background.set_background_mask(camera)
+        if self.include_background:
+            self.background.set_background_mask(camera)
         
         self.frame = camera.meta['frame']
         self.frame_idx = camera.meta['frame_idx']
@@ -571,17 +572,17 @@ class StreetGaussianModel(nn.Module):
             model.denom[visibility_model] += 1
         
     def densify_and_prune(self, max_grad, min_opacity, prune_big_points, exclude_list=[]):
-        scalars = None
-        tensors = None
+        scalars = {}
+        tensors = {}
         for model_name in self.model_name_id.keys():
             if startswith_any(model_name, exclude_list):
                 continue
             model: GaussianModel = getattr(self, model_name)
 
             scalars_, tensors_ = model.densify_and_prune(max_grad, min_opacity, prune_big_points)
-            if model_name == 'background':
-                scalars = scalars_
-                tensors = tensors_
+            prefix = '' if model_name == 'background' else f'{model_name}_'
+            scalars.update({f'{prefix}{key}': value for key, value in scalars_.items()})
+            tensors.update({f'{prefix}{key}': value for key, value in tensors_.items()})
     
         return scalars, tensors
     

@@ -7,6 +7,7 @@ import numpy as np
 
 from lib.utils.camera_utils import Camera
 from lib.utils.img_utils import visualize_depth_numpy
+from lib.utils.sky_utils import blacken_sky
 from lib.config import cfg
 
 class StreetGaussianVisualizer():
@@ -31,6 +32,13 @@ class StreetGaussianVisualizer():
         self.depth_visualize_func = lambda x: visualize_depth_numpy(x, cmap=cv2.COLORMAP_JET)[0][..., [2, 1, 0]]
         self.diff_visualize_func = lambda x: visualize_depth_numpy(x, cmap=cv2.COLORMAP_TURBO)[0][..., [2, 1, 0]]
 
+    def _gt_rgb(self, camera: Camera):
+        sky_mask = camera.guidance.get('sky_mask') if hasattr(camera, 'guidance') else None
+        return blacken_sky(
+            camera.original_image[:3].clamp(0.0, 1.0),
+            sky_mask,
+            bool(cfg.data.get('blacken_sky_in_rgb_loss', False)),
+        )
             
     def visualize(self, result, camera: Camera):
         self.cams.append(camera.meta['cam'])
@@ -46,10 +54,10 @@ class StreetGaussianVisualizer():
             torchvision.utils.save_image(rgb_bkgd, os.path.join(self.result_dir, f'{name}_rgb_bkgd.png'))
             torchvision.utils.save_image(rgb_obj, os.path.join(self.result_dir, f'{name}_rgb_obj.png'))
             torchvision.utils.save_image(acc_obj.float(), os.path.join(self.result_dir, f'{name}_acc_obj.png'))
-            torchvision.utils.save_image(camera.original_image[:3].clamp(0.0, 1.0), os.path.join(self.result_dir, f'{name}_gt.png'))
+            torchvision.utils.save_image(self._gt_rgb(camera), os.path.join(self.result_dir, f'{name}_gt.png'))
     
         if self.save_video:
-            rgb_gt = (camera.original_image[:3].clamp(0.0, 1.0).detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
+            rgb_gt = (self._gt_rgb(camera).detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
             self.rgbs_gt.append(rgb_gt)
             rgb_bkgd = (rgb_bkgd.detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
             self.rgbs_bkgd.append(rgb_bkgd)
@@ -85,7 +93,7 @@ class StreetGaussianVisualizer():
                 
     def visualize_diff(self, result, camera: Camera):
         name = camera.image_name
-        rgb_gt = torch.clamp(camera.original_image[:3], 0.0, 1.0)
+        rgb_gt = self._gt_rgb(camera).detach().cpu()
         rgb = torch.clamp(result['rgb'].detach().cpu(), 0.0, 1.0)
         
         if hasattr(camera, 'original_mask'):
@@ -108,7 +116,15 @@ class StreetGaussianVisualizer():
 
     def visualize_depth(self, result, camera: Camera):
         name = camera.image_name
-        depth = result['depth']
+        depth = result.get('depth')
+        if depth is None:
+            depth = torch.zeros(
+                1,
+                int(camera.image_height),
+                int(camera.image_width),
+                device=camera.original_image.device,
+                dtype=camera.original_image.dtype,
+            )
 
         depth = depth.detach().permute(1, 2, 0).detach().cpu().numpy() # [H, W, 1]
         

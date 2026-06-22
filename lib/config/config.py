@@ -44,6 +44,7 @@ cfg.train.checkpoint_iterations = [30000]
 cfg.train.checkpoint_interval = 0  # save checkpoint every N steps (0 = only use checkpoint_iterations list)
 cfg.train.start_checkpoint = None
 cfg.train.importance_sampling = False
+cfg.train.render_trajectory_videos = True
 
 cfg.optim = CN()
 # learning rate
@@ -67,10 +68,15 @@ cfg.optim.densify_grad_abs_obj = False
 cfg.optim.max_screen_size = 20
 cfg.optim.min_opacity = 0.005
 cfg.optim.percent_big_ws = 0.1
+cfg.optim.actor_box_prune = False
+cfg.optim.actor_box_prune_scale = 1.0
+cfg.optim.actor_box_prune_sample_count = 2
+cfg.optim.obj_acc_loss_from_iter = cfg.optim.densify_until_iter
 # loss weight
 cfg.optim.lambda_l1 = 1.
 cfg.optim.lambda_dssim = 0.2
 cfg.optim.lambda_sky = 0.
+cfg.optim.lambda_sky_rgb = 0.
 cfg.optim.lambda_sky_scale = []
 cfg.optim.lambda_semantic = 0.
 cfg.optim.lambda_reg = 0.
@@ -95,10 +101,15 @@ cfg.model.nsg = CN()
 cfg.model.nsg.include_bkgd = True # include background
 cfg.model.nsg.include_obj = True # include object
 cfg.model.nsg.include_sky = False # include sky cubemap
+cfg.model.nsg.composite_sky = True # composite sky cubemap behind Gaussians in the main RGB render
+cfg.model.nsg.force_sky_mask_composite = True # use sky cubemap directly on semantic sky pixels during rendering
+cfg.model.nsg.force_sky_dark_top_mask = True # also replace top-connected camera-mask dark pixels with sky during rendering
+cfg.model.nsg.force_sky_dark_threshold = 35.0 / 255.0
 cfg.model.nsg.opt_track = True # tracklets optimization
 cfg.model.sky = CN()
 cfg.model.sky.resolution = 1024
 cfg.model.sky.white_background = True
+cfg.model.sky.force_top_sky_rows = 0
 
 
 #### Note: We have not fully tested this.
@@ -123,11 +134,26 @@ cfg.data.split_test = -1
 cfg.data.shuffle = True
 cfg.data.eval = True
 cfg.data.type = 'Colmap'
+cfg.data.dataset_type = ''
 cfg.data.images = 'images'
 cfg.data.use_semantic = False
 cfg.data.use_mono_depth = False
 cfg.data.use_mono_normal = False
 cfg.data.use_colmap = True
+cfg.data.use_pi3 = False
+cfg.data.pi3_pointcloud_path = 'pi3_static_points.npz'
+cfg.data.ignore_sky_in_rgb_loss = False
+cfg.data.blacken_sky_in_rgb_loss = False
+cfg.data.obj_point_mask_filter = False
+cfg.data.obj_point_mask_filter_min_visible = 2
+cfg.data.obj_point_mask_filter_min_inside_ratio = 0.5
+cfg.data.obj_point_mask_filter_min_points = 2000
+cfg.data.obj_point_mask_filter_max_images = 64
+cfg.data.obj_point_mask_filter_max_outside = -1
+cfg.data.obj_local_robust_filter = False
+cfg.data.obj_local_filter_bbox_scale = 1.1
+cfg.data.obj_local_filter_percentile_clip = 0.5
+cfg.data.obj_local_filter_min_points = 2000
 # data.load_pcd_from: Load the initialization point cloud from a previous experiment without generation.
 # data.extent: radius of the scene, we recommend 10 - 20 meters.
 # data.sphere_scale: Scale the sphere radius by this factor.
@@ -159,4 +185,3 @@ parser.add_argument("opts", default=None, nargs=argparse.REMAINDER)
 
 args = parser.parse_args()
 cfg = make_cfg(cfg, args)
-

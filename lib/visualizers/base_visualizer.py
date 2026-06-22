@@ -7,6 +7,7 @@ import numpy as np
 
 from lib.utils.camera_utils import Camera
 from lib.utils.img_utils import visualize_depth_numpy
+from lib.utils.sky_utils import blacken_sky
 from lib.config import cfg
 
 
@@ -26,13 +27,21 @@ class BaseVisualizer():
         self.depth_visualize_func = lambda x: visualize_depth_numpy(x, cmap=cv2.COLORMAP_JET)[0][..., [2, 1, 0]]
         self.diff_visualize_func = lambda x: visualize_depth_numpy(x, cmap=cv2.COLORMAP_TURBO)[0][..., [2, 1, 0]]
 
+    def _gt_rgb(self, camera: Camera):
+        sky_mask = camera.guidance.get('sky_mask') if hasattr(camera, 'guidance') else None
+        return blacken_sky(
+            camera.original_image[:3],
+            sky_mask,
+            bool(cfg.data.get('blacken_sky_in_rgb_loss', False)),
+        )
+
     def visualize(self, result, camera: Camera):
         name = camera.image_name
         rgb = result['rgb']
 
         if self.save_image:
             torchvision.utils.save_image(rgb, os.path.join(self.result_dir, f'{name}_rgb.png'))
-            torchvision.utils.save_image(camera.original_image[:3], os.path.join(self.result_dir, f'{name}_gt.png'))
+            torchvision.utils.save_image(self._gt_rgb(camera), os.path.join(self.result_dir, f'{name}_gt.png'))
      
         if self.save_video:
             rgb = (rgb.detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
@@ -46,7 +55,7 @@ class BaseVisualizer():
     
     def visualize_diff(self, result, camera: Camera):
         name = camera.image_name
-        rgb_gt = camera.original_image[:3]
+        rgb_gt = self._gt_rgb(camera)
         rgb = result['rgb'].detach().cpu()  
               
         if hasattr(camera, 'original_mask'):

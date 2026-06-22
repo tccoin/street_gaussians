@@ -80,7 +80,9 @@ class SkyCubeMap(nn.Module):
         sky_mask = camera.guidance['sky_mask'] if 'sky_mask' in camera.guidance else None
         if cfg.mode == 'train' and sky_mask is not None:
             mask = sky_mask[0].to('cuda', non_blocking=True)
-            mask[:50, :] = True
+            force_top_rows = int(self.cfg.get('force_top_sky_rows', 0))
+            if force_top_rows > 0:
+                mask[:force_top_rows, :] = True
         elif acc is not None:
             mask = (1 - acc[0]) > 1e-3
         else:

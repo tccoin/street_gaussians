@@ -1,4 +1,4 @@
-from lib.utils.waymo_utils import generate_dataparser_outputs
+from lib.utils.waymo_utils import generate_dataparser_outputs, save_frame_camera_info
 from lib.utils.graphics_utils import focal2fov, BasicPointCloud
 from lib.utils.data_utils import get_val_frames
 from lib.datasets.base_readers import CameraInfo, SceneInfo, getNerfppNorm, fetchPly, get_PCA_Norm, get_Sphere_Norm
@@ -23,33 +23,48 @@ def readWaymoFullInfo(path, images='images', split_train=-1, split_test=-1, **kw
         save_dir = os.path.join(cfg.model_path, 'input_ply')
         os.system(f'rm -rf {save_dir}')
         shutil.copytree(load_dir, save_dir)
-        
+
         colmap_dir = os.path.join(cfg.workspace, cfg.data.load_pcd_from, 'colmap')
         save_dir = os.path.join(cfg.model_path, 'colmap')
         os.system(f'rm -rf {save_dir}')
         shutil.copytree(colmap_dir, save_dir)
-        
+
     bkgd_ply_path = os.path.join(cfg.model_path, 'input_ply/points3D_bkgd.ply')
     build_pointcloud = (cfg.mode == 'train') and (not os.path.exists(bkgd_ply_path) or cfg.data.get('regenerate_pcd', False))
-    
+
     # dynamic mask
     dynamic_mask_dir = os.path.join(path, 'dynamic_mask')
     load_dynamic_mask = True
+    ignore_mask_dir = os.path.join(path, 'ignore_mask')
+    load_ignore_mask = (cfg.mode == 'train') and os.path.exists(ignore_mask_dir)
 
     # sky mask
     sky_mask_dir = os.path.join(path, 'sky_mask')
-    load_sky_mask = (cfg.mode == 'train') and os.path.exists(sky_mask_dir)
-    
+    load_sky_mask = os.path.exists(sky_mask_dir)
+
     # lidar depth
     lidar_depth_dir = os.path.join(path, 'lidar_depth')
-    load_lidar_depth = (cfg.mode == 'train') and os.path.exists(lidar_depth_dir)
+    load_lidar_depth = (
+        (cfg.mode == 'train')
+        and cfg.optim.get('lambda_depth_lidar', 0) > 0
+        and os.path.exists(lidar_depth_dir)
+        and any(name.endswith('.npy') for name in os.listdir(lidar_depth_dir))
+    )
 
     output = generate_dataparser_outputs(
-        datadir=path, 
+        datadir=path,
         selected_frames=selected_frames,
         build_pointcloud=build_pointcloud,
         cameras=cfg.data.get('cameras', [0, 1, 2]),
     )
+    if cfg.mode == 'train':
+        save_frame_camera_info(
+            output,
+            cfg.model_path,
+            source_path=path,
+            selected_frames=selected_frames,
+            cameras=cfg.data.get('cameras', [0, 1, 2]),
+        )
 
     exts = output['exts']
     ixts = output['ixts']
@@ -65,7 +80,7 @@ def readWaymoFullInfo(path, images='images', split_train=-1, split_test=-1, **kw
     tracklet_timestamps = output['tracklet_timestamps']
     obj_bounds = output['obj_bounds']
     train_frames, test_frames = get_val_frames(
-        num_frames, 
+        num_frames,
         test_every=split_test if split_test > 0 else None,
         train_every=split_train if split_train > 0 else None,
     )
@@ -77,12 +92,12 @@ def readWaymoFullInfo(path, images='images', split_train=-1, split_test=-1, **kw
     scene_metadata['num_images'] = len(exts)
     scene_metadata['num_cams'] = len(cfg.data.cameras)
     scene_metadata['num_frames'] = num_frames
-    
+
     camera_timestamps = dict()
     for cam in cfg.data.get('cameras', [0, 1, 2]):
         camera_timestamps[cam] = dict()
         camera_timestamps[cam]['train_timestamps'] = []
-        camera_timestamps[cam]['test_timestamps'] = []      
+        camera_timestamps[cam]['test_timestamps'] = []
 
     ########################################################################################################################
     cam_infos = []
@@ -98,14 +113,14 @@ def readWaymoFullInfo(path, images='images', split_train=-1, split_test=-1, **kw
 
         width, height = image.size
         fx, fy = ixt[0, 0], ixt[1, 1]
-        FovY = focal2fov(fx, height)
-        FovX = focal2fov(fy, width)    
-        
+        FovY = focal2fov(fy, height)
+        FovX = focal2fov(fx, width)
+
         RT = np.linalg.inv(c2w)
         R = RT[:3, :3].T
         T = RT[:3, 3]
         K = ixt.copy()
-        
+
         metadata = dict()
         metadata['frame'] = frames[i]
         metadata['cam'] = cams[i]
@@ -120,7 +135,7 @@ def readWaymoFullInfo(path, images='images', split_train=-1, split_test=-1, **kw
         else:
             metadata['is_val'] = True
             camera_timestamps[cams[i]]['test_timestamps'].append(cams_timestamps[i])
-        
+
         guidance = dict()
 
         # load dynamic mask
@@ -139,14 +154,20 @@ def readWaymoFullInfo(path, images='images', split_train=-1, split_test=-1, **kw
             depth = np.zeros_like(mask).astype(np.float32)
             depth[mask] = value
             guidance['lidar_depth'] = depth
-            
+
         # load sky mask
         if load_sky_mask:
             sky_mask_path = os.path.join(sky_mask_dir, f'{image_name}.png')
             sky_mask = (cv2.imread(sky_mask_path)[..., 0]) > 0.
             guidance['sky_mask'] = Image.fromarray(sky_mask)
-        
-        mask = None        
+
+        if load_ignore_mask:
+            ignore_mask_path = os.path.join(ignore_mask_dir, f'{image_name}.png')
+            if os.path.exists(ignore_mask_path):
+                ignore_mask = (cv2.imread(ignore_mask_path, cv2.IMREAD_GRAYSCALE) > 0)
+                guidance['mask'] = Image.fromarray(~ignore_mask)
+
+        mask = None
         cam_info = CameraInfo(
             uid=i, R=R, T=T, FovY=FovY, FovX=FovX, K=K,
             image=image, image_path=image_path, image_name=image_name,
@@ -155,18 +176,18 @@ def readWaymoFullInfo(path, images='images', split_train=-1, split_test=-1, **kw
             guidance=guidance,
         )
         cam_infos.append(cam_info)
-        
+
         # sys.stdout.write('\n')
     train_cam_infos = [cam_info for cam_info in cam_infos if not cam_info.metadata['is_val']]
     test_cam_infos = [cam_info for cam_info in cam_infos if cam_info.metadata['is_val']]
-    
+
     for cam in cfg.data.get('cameras', [0, 1, 2]):
         camera_timestamps[cam]['train_timestamps'] = sorted(camera_timestamps[cam]['train_timestamps'])
         camera_timestamps[cam]['test_timestamps'] = sorted(camera_timestamps[cam]['test_timestamps'])
     scene_metadata['camera_timestamps'] = camera_timestamps
-        
+
     novel_view_cam_infos = []
-    
+
     #######################################################################################################################3
     # Get scene extent
     # 1. Default nerf++ setting
@@ -177,15 +198,15 @@ def readWaymoFullInfo(path, images='images', split_train=-1, split_test=-1, **kw
 
     # 2. The radius we obtain should not be too small (larger than 10 here)
     nerf_normalization['radius'] = max(nerf_normalization['radius'], 10)
-    
+
     # 3. If we have extent set in config, we ignore previous setting
     if cfg.data.get('extent', False):
         nerf_normalization['radius'] = cfg.data.extent
-    
+
     # 4. We write scene radius back to config
     cfg.data.extent = float(nerf_normalization['radius'])
 
-    # 5. We write scene center and radius to scene metadata    
+    # 5. We write scene center and radius to scene metadata
     scene_metadata['scene_center'] = nerf_normalization['center']
     scene_metadata['scene_radius'] = nerf_normalization['radius']
     print(f'Scene extent: {nerf_normalization["radius"]}')
@@ -196,7 +217,7 @@ def readWaymoFullInfo(path, images='images', split_train=-1, split_test=-1, **kw
         sphere_pcd: BasicPointCloud = fetchPly(lidar_ply_path)
     else:
         sphere_pcd: BasicPointCloud = fetchPly(bkgd_ply_path)
-    
+
     sphere_normalization = get_Sphere_Norm(sphere_pcd.points)
     scene_metadata['sphere_center'] = sphere_normalization['center']
     scene_metadata['sphere_radius'] = sphere_normalization['radius']
@@ -218,8 +239,8 @@ def readWaymoFullInfo(path, images='images', split_train=-1, split_test=-1, **kw
         metadata=scene_metadata,
         novel_view_cameras=novel_view_cam_infos,
     )
-    
+
     return scene_info
-    
-    
-    
+
+
+

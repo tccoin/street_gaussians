@@ -51,7 +51,7 @@ class StreetGaussianRenderer():
     ):        
         pc.set_visibility(include_list=pc.obj_list)
         if parse_camera_again: pc.parse_camera(viewpoint_camera)        
-        result = self.render_kernel(viewpoint_camera, pc, convert_SHs_python, compute_cov3D_python, scaling_modifier, override_color, white_background=True)
+        result = self.render_kernel(viewpoint_camera, pc, convert_SHs_python, compute_cov3D_python, scaling_modifier, override_color, white_background=False)
 
         return result
     
@@ -67,7 +67,7 @@ class StreetGaussianRenderer():
     ):
         pc.set_visibility(include_list=['background'])
         if parse_camera_again: pc.parse_camera(viewpoint_camera)
-        result = self.render_kernel(viewpoint_camera, pc, convert_SHs_python, compute_cov3D_python, scaling_modifier, override_color, white_background=True)
+        result = self.render_kernel(viewpoint_camera, pc, convert_SHs_python, compute_cov3D_python, scaling_modifier, override_color, white_background=False)
 
         return result
     
@@ -121,10 +121,23 @@ class StreetGaussianRenderer():
         result = self.render_kernel(viewpoint_camera, pc, convert_SHs_python, compute_cov3D_python, scaling_modifier, override_color)
 
         # Step2: render sky
-        if pc.include_sky:
+        if pc.include_sky and bool(cfg.model.nsg.get('composite_sky', True)):
             sky_color = pc.sky_cubemap(viewpoint_camera, result['acc'].detach())
 
             result['rgb'] = result['rgb'] + sky_color * (1 - result['acc'])
+            sky_mask = viewpoint_camera.guidance.get('sky_mask') if hasattr(viewpoint_camera, 'guidance') else None
+            if cfg.mode != 'train' and bool(cfg.model.nsg.get('force_sky_mask_composite', True)):
+                force_sky_mask = None
+                if sky_mask is not None:
+                    force_sky_mask = sky_mask.to(device=result['rgb'].device, dtype=torch.bool)
+                if bool(cfg.model.nsg.get('force_sky_dark_top_mask', True)) and hasattr(viewpoint_camera, 'original_image'):
+                    original_image = viewpoint_camera.original_image[:3].to(device=result['rgb'].device)
+                    threshold = float(cfg.model.nsg.get('force_sky_dark_threshold', 35.0 / 255.0))
+                    dark = original_image.max(dim=0, keepdim=True).values <= threshold
+                    top_connected_dark = torch.cumprod(dark[0].to(torch.int32), dim=0).bool().unsqueeze(0)
+                    force_sky_mask = top_connected_dark if force_sky_mask is None else torch.logical_or(force_sky_mask, top_connected_dark)
+                if force_sky_mask is not None:
+                    result['rgb'] = torch.where(force_sky_mask, pc.sky_cubemap(viewpoint_camera, acc=None), result['rgb'])
 
         if pc.use_color_correction:
             result['rgb'] = pc.color_correction(viewpoint_camera, result['rgb'])

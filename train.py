@@ -3,6 +3,7 @@ import torch
 from random import randint
 from lib.utils.loss_utils import l1_loss, l2_loss, psnr, ssim
 from lib.utils.img_utils import save_img_torch, visualize_depth_numpy
+from lib.utils.sky_utils import blacken_sky, has_mask_pixels
 from lib.models.street_gaussian_renderer import StreetGaussianRenderer
 from lib.models.street_gaussian_model import StreetGaussianModel
 from lib.utils.general_utils import safe_state
@@ -23,6 +24,12 @@ except ImportError:
 
 from lib.visualizers.street_gaussian_visualizer import StreetGaussianVisualizer
 from render import offset_camera
+
+
+def rgb_loss_mask(mask, sky_mask):
+    if sky_mask is None or not bool(cfg.data.get('ignore_sky_in_rgb_loss', False)):
+        return mask
+    return torch.logical_and(mask, torch.logical_not(sky_mask.bool()))
 
 
 def render_trajectory_videos(scene: Scene, gaussians: StreetGaussianModel, renderer: StreetGaussianRenderer, iteration: int):
@@ -82,12 +89,12 @@ def training():
         else:
             loaded_iter = cfg.loaded_iter
         ckpt_path = os.path.join(cfg.trained_model_dir, f'iteration_{loaded_iter}.pth')
-        state_dict = torch.load(ckpt_path)
+        state_dict = torch.load(ckpt_path, weights_only=False)
         start_iter = state_dict['iter']
         print(f'Loading model from {ckpt_path}')
         gaussians.load_state_dict(state_dict)
-    except:
-        pass
+    except Exception as e:
+        print(f'Checkpoint resume skipped: {e}')
 
     print(f'Starting from {start_iter}')
     save_cfg(cfg, cfg.model_path, epoch=start_iter)
@@ -137,6 +144,15 @@ def training():
         if 'obj_bound' in viewpoint_cam.guidance:
             obj_bound = viewpoint_cam.guidance['obj_bound']
             obj_bound = obj_bound.cuda(non_blocking=True) if not obj_bound.is_cuda else obj_bound
+        valid_image_mask = mask.bool()
+        if sky_mask is not None:
+            sky_mask = torch.logical_and(sky_mask.bool(), valid_image_mask)
+        mask = rgb_loss_mask(mask, sky_mask)
+        gt_image_rgb_loss = blacken_sky(
+            gt_image,
+            sky_mask,
+            bool(cfg.data.get('blacken_sky_in_rgb_loss', False)),
+        )
         
             
         render_pkg = gaussians_renderer.render(viewpoint_cam, gaussians)
@@ -146,20 +162,28 @@ def training():
         scalar_dict = dict()
         
         # rgb loss
-        Ll1 = l1_loss(image, gt_image, mask)
+        Ll1 = l1_loss(image, gt_image_rgb_loss, mask)
         scalar_dict['l1_loss'] = Ll1.item()
-        loss = (1.0 - optim_args.lambda_dssim) * optim_args.lambda_l1 * Ll1 + optim_args.lambda_dssim * (1.0 - ssim(image, gt_image, mask=mask))
+        loss = (1.0 - optim_args.lambda_dssim) * optim_args.lambda_l1 * Ll1 + optim_args.lambda_dssim * (1.0 - ssim(image, gt_image_rgb_loss, mask=mask))
+
+        if optim_args.get('lambda_sky_rgb', 0.0) > 0 and gaussians.include_sky and has_mask_pixels(sky_mask):
+            sky_pkg = gaussians_renderer.render_sky(viewpoint_cam, gaussians)
+            sky_rgb_loss = l1_loss(sky_pkg['rgb'], gt_image, sky_mask.bool())
+            scalar_dict['sky_rgb_loss'] = sky_rgb_loss.item()
+            loss += optim_args.lambda_sky_rgb * sky_rgb_loss
     
         # sky loss
         if optim_args.lambda_sky > 0 and gaussians.include_sky and sky_mask is not None:
             acc = torch.clamp(acc, min=1e-6, max=1.-1e-6)
-            sky_loss = torch.where(sky_mask, -torch.log(1 - acc), -torch.log(acc)).mean()
+            sky_loss_map = torch.where(sky_mask, -torch.log(1 - acc), -torch.log(acc))
+            sky_loss = sky_loss_map[valid_image_mask].mean()
             if len(optim_args.lambda_sky_scale) > 0:
                 sky_loss *= optim_args.lambda_sky_scale[viewpoint_cam.meta['cam']]
             scalar_dict['sky_loss'] = sky_loss.item()
             loss += optim_args.lambda_sky * sky_loss
         
-        if optim_args.lambda_reg > 0 and gaussians.include_obj and iteration >= optim_args.densify_until_iter and obj_bound is not None:
+        obj_acc_loss_from_iter = int(optim_args.get('obj_acc_loss_from_iter', optim_args.densify_until_iter))
+        if optim_args.lambda_reg > 0 and gaussians.include_obj and iteration >= obj_acc_loss_from_iter and obj_bound is not None:
             render_pkg_obj = gaussians_renderer.render_object(viewpoint_cam, gaussians, parse_camera_again=False)
             image_obj, acc_obj = render_pkg_obj["rgb"], render_pkg_obj['acc']
             acc_obj = torch.clamp(acc_obj, min=1e-6, max=1.-1e-6)
@@ -172,12 +196,18 @@ def training():
         # lidar depth loss
         if optim_args.lambda_depth_lidar > 0 and lidar_depth is not None:            
             depth_mask = torch.logical_and((lidar_depth > 0.), mask)
-            expected_depth = depth / (render_pkg['acc'] + 1e-10)  
-            depth_error = torch.abs((expected_depth[depth_mask] - lidar_depth[depth_mask]))
-            depth_error, _ = torch.topk(depth_error, int(0.95 * depth_error.size(0)), largest=False)
-            lidar_depth_loss = depth_error.mean()
-            scalar_dict['lidar_depth_loss'] = lidar_depth_loss
-            loss += optim_args.lambda_depth_lidar * lidar_depth_loss
+            depth_pixel_count = int(depth_mask.sum().item())
+            scalar_dict['lidar_depth_pixels'] = depth_pixel_count
+            if depth_pixel_count > 0:
+                expected_depth = depth / (render_pkg['acc'] + 1e-10)
+                depth_error = torch.abs((expected_depth[depth_mask] - lidar_depth[depth_mask]))
+                depth_error = depth_error[torch.isfinite(depth_error)]
+                if depth_error.numel() > 0:
+                    k = max(1, int(0.95 * depth_error.numel()))
+                    depth_error, _ = torch.topk(depth_error, k, largest=False)
+                    lidar_depth_loss = depth_error.mean()
+                    scalar_dict['lidar_depth_loss'] = lidar_depth_loss.item()
+                    loss += optim_args.lambda_depth_lidar * lidar_depth_loss
                     
         # color correction loss
         if optim_args.lambda_color_correction > 0 and gaussians.use_color_correction:
@@ -218,7 +248,7 @@ def training():
             if iteration % 10 == 0:                    
                 # Progress bar
                 ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
-                ema_psnr_for_log = 0.4 * psnr(image, gt_image, mask).mean().float() + 0.6 * ema_psnr_for_log
+                ema_psnr_for_log = 0.4 * psnr(image, gt_image_rgb_loss, mask).mean().float() + 0.6 * ema_psnr_for_log
                 progress_bar.set_postfix({"Exp": f"{cfg.task}-{cfg.exp_name}", 
                                           "Loss": f"{ema_loss_for_log:.{7}f},", 
                                           "PSNR": f"{ema_psnr_for_log:.{4}f}"})
@@ -279,7 +309,7 @@ def training():
 
             # Every N//5 steps render two videos: original traj + shift traj
             interval = max(1, training_args.iterations // 5)
-            if iteration > 0 and iteration % interval == 0:
+            if cfg.train.get('render_trajectory_videos', True) and iteration > 0 and iteration % interval == 0:
                 torch.cuda.empty_cache()
                 render_trajectory_videos(scene, gaussians, gaussians_renderer, iteration)
                 torch.cuda.empty_cache()
@@ -354,8 +384,18 @@ def training_report(tb_writer, iteration, scalar_stats, tensor_stats, testing_it
                         mask = viewpoint.original_mask.cuda().bool()
                     else:
                         mask = torch.ones_like(gt_image[0]).bool()
-                    l1_test += l1_loss(image, gt_image, mask).mean().double()
-                    psnr_test += psnr(image, gt_image, mask).mean().double()
+                    sky_mask = viewpoint.guidance.get('sky_mask') if hasattr(viewpoint, 'guidance') else None
+                    if sky_mask is not None:
+                        sky_mask = sky_mask.cuda(non_blocking=True) if not sky_mask.is_cuda else sky_mask
+                        sky_mask = torch.logical_and(sky_mask.bool(), mask.bool())
+                    mask = rgb_loss_mask(mask, sky_mask)
+                    gt_image_rgb_loss = blacken_sky(
+                        gt_image,
+                        sky_mask,
+                        bool(cfg.data.get('blacken_sky_in_rgb_loss', False)),
+                    )
+                    l1_test += l1_loss(image, gt_image_rgb_loss, mask).mean().double()
+                    psnr_test += psnr(image, gt_image_rgb_loss, mask).mean().double()
 
                 psnr_test /= len(config['cameras'])
                 l1_test /= len(config['cameras'])
