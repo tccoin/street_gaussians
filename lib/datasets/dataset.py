@@ -7,11 +7,13 @@ from lib.datasets.base_readers import storePly, SceneInfo
 from lib.datasets.colmap_readers import readColmapSceneInfo
 from lib.datasets.blender_readers import readNerfSyntheticInfo
 from lib.datasets.waymo_full_readers import readWaymoFullInfo
+from lib.datasets.onedat_readers import readOneDatInfo
 
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
     "Blender" : readNerfSyntheticInfo,
     "Waymo": readWaymoFullInfo,
+    "OneDat": readOneDatInfo,
 }
 
 class Dataset():
@@ -58,4 +60,3 @@ class Dataset():
             self.train_cameras[resolution_scale] = cameraList_from_camInfos(self.scene_info.train_cameras, resolution_scale)
             print("Loading Test Cameras")
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(self.scene_info.test_cameras, resolution_scale)
-            
