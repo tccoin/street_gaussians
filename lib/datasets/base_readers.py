@@ -101,11 +101,11 @@ def storePly(path, xyz, rgb):
             ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
             ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')]
     
-    normals = np.zeros_like(xyz)
-
     elements = np.empty(xyz.shape[0], dtype=dtype)
-    attributes = np.concatenate((xyz, normals, rgb), axis=1)
-    elements[:] = list(map(tuple, attributes))
+    elements['x'], elements['y'], elements['z'] = np.asarray(xyz, dtype=np.float32).T
+    elements['nx'] = elements['ny'] = elements['nz'] = 0.0
+    rgb_u8 = np.asarray(rgb, dtype=np.uint8)
+    elements['red'], elements['green'], elements['blue'] = rgb_u8.T
 
     # Create the PlyData object and write to file
     vertex_element = PlyElement.describe(elements, 'vertex')

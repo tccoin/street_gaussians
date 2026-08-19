@@ -65,7 +65,7 @@ def readOneDatInfo(path, images="images", split_train=-1, split_test=-1, **kwarg
     for cam in configured_cameras:
         camera_timestamps[int(cam)] = {"train_timestamps": [], "test_timestamps": []}
 
-    sky_mask_dir = os.path.join(path, "sky_mask")
+    sky_mask_dir = os.path.join(path, str(cfg.data.get("sky_masks", "sky_mask")))
     load_sky_mask = cfg.mode == "train" and os.path.exists(sky_mask_dir)
 
     cam_infos = []
@@ -73,7 +73,11 @@ def readOneDatInfo(path, images="images", split_train=-1, split_test=-1, **kwarg
         cam_id = int(cams[i])
         image_path = str(image_filenames[i])
         image_name = os.path.basename(image_path).split(".")[0]
-        image = Image.open(image_path)
+        # PIL keeps the underlying file descriptor open while an Image remains
+        # lazy.  A multi-camera OneDat scene can contain more images than the
+        # process FD limit, so materialize the pixels and close the file here.
+        with Image.open(image_path) as image_file:
+            image = image_file.copy()
         width, height = image.size
         if cam_id in image_sizes:
             height, width = image_sizes[cam_id]

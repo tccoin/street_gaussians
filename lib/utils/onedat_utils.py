@@ -24,8 +24,8 @@ def _load_json(path, default):
         return json.load(handle)
 
 
-def _available_camera_ids(datadir):
-    intrinsics_dir = os.path.join(datadir, "intrinsics")
+def _available_camera_ids(datadir, intrinsics_subdir="intrinsics"):
+    intrinsics_dir = os.path.join(datadir, intrinsics_subdir)
     ids = []
     for path in glob(os.path.join(intrinsics_dir, "*.txt")):
         stem = os.path.splitext(os.path.basename(path))[0]
@@ -39,17 +39,17 @@ def _camera_name_by_id(datadir):
     return {int(k): str(v) for k, v in raw.items()}
 
 
-def _camera_models_by_id(datadir):
-    raw = _load_json(os.path.join(datadir, "camera_models.json"), {})
+def _camera_models_by_id(datadir, camera_models_file="camera_models.json"):
+    raw = _load_json(os.path.join(datadir, camera_models_file), {})
     return {int(k): v for k, v in raw.items()}
 
 
-def load_camera_info(datadir):
+def load_camera_info(datadir, intrinsics_subdir="intrinsics", camera_models_file="camera_models.json"):
     ego_pose_dir = os.path.join(datadir, "ego_pose")
-    intrinsics_dir = os.path.join(datadir, "intrinsics")
+    intrinsics_dir = os.path.join(datadir, intrinsics_subdir)
     extrinsics_dir = os.path.join(datadir, "extrinsics")
-    camera_ids = _available_camera_ids(datadir)
-    camera_models = _camera_models_by_id(datadir)
+    camera_ids = _available_camera_ids(datadir, intrinsics_subdir)
+    camera_models = _camera_models_by_id(datadir, camera_models_file)
 
     intrinsics = {}
     extrinsics = {}
@@ -87,10 +87,20 @@ def load_camera_info(datadir):
 
 
 def _copy_init_ply(datadir):
-    source = os.path.join(datadir, "init_ply", "points3D_bkgd.ply")
     target = os.path.join(cfg.model_path, "input_ply", "points3D_bkgd.ply")
     if os.path.exists(target) and not cfg.data.get("regenerate_pcd", False):
         return target
+    if bool(cfg.data.get("use_pi3", False)):
+        from lib.datasets.base_readers import storePly
+        from lib.utils.waymo_utils import load_pi3_static_pointcloud
+
+        points_xyz, points_rgb, pi3_path = load_pi3_static_pointcloud(datadir)
+        print(f"initialize OneDat from PI3 static pointcloud: {pi3_path}")
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        storePly(target, points_xyz, points_rgb)
+        return target
+
+    source = os.path.join(datadir, "init_ply", "points3D_bkgd.ply")
     if not os.path.exists(source):
         raise FileNotFoundError(f"OneDat init point cloud not found: {source}")
     os.makedirs(os.path.dirname(target), exist_ok=True)
@@ -99,12 +109,19 @@ def _copy_init_ply(datadir):
 
 
 def generate_dataparser_outputs(datadir, selected_frames=None, build_pointcloud=True, cameras=None):
-    image_dir = os.path.join(datadir, "images")
+    image_subdir = str(cfg.data.get("images", "images"))
+    intrinsics_subdir = str(cfg.data.get("intrinsics", "intrinsics"))
+    camera_models_file = str(cfg.data.get("camera_models", "camera_models.json"))
+    image_dir = os.path.join(datadir, image_subdir)
     image_filenames_all = sorted(glob(os.path.join(image_dir, "*.jpg")) + glob(os.path.join(image_dir, "*.jpeg")) + glob(os.path.join(image_dir, "*.png")))
     if not image_filenames_all:
         raise FileNotFoundError(f"No images found in {image_dir}")
 
-    intrinsics, extrinsics, ego_frame_poses, ego_cam_poses, image_sizes, camera_names = load_camera_info(datadir)
+    intrinsics, extrinsics, ego_frame_poses, ego_cam_poses, image_sizes, camera_names = load_camera_info(
+        datadir,
+        intrinsics_subdir=intrinsics_subdir,
+        camera_models_file=camera_models_file,
+    )
     if cameras is None:
         cameras = sorted(intrinsics.keys())
     cameras = [int(cam) for cam in cameras]

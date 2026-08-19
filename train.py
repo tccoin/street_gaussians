@@ -1,5 +1,6 @@
 import os
 import torch
+import torch.nn.functional as F
 from random import randint
 from lib.utils.loss_utils import l1_loss, l2_loss, psnr, ssim
 from lib.utils.img_utils import save_img_torch, visualize_depth_numpy
@@ -30,6 +31,49 @@ def rgb_loss_mask(mask, sky_mask):
     if sky_mask is None or not bool(cfg.data.get('ignore_sky_in_rgb_loss', False)):
         return mask
     return torch.logical_and(mask, torch.logical_not(sky_mask.bool()))
+
+
+def save_multicam_training_image(
+    scene: Scene,
+    gaussians: StreetGaussianModel,
+    renderer: StreetGaussianRenderer,
+    iteration: int,
+):
+    """Save one synchronized GT/render/depth panel for every configured camera."""
+
+    cameras = scene.getTrainCameras()
+    if not cameras:
+        return
+    frames = sorted({int(camera.meta.get("frame", 0)) for camera in cameras})
+    requested_frame = int(cfg.render.get("multicam_log_frame", -1))
+    target_frame = frames[len(frames) // 2] if requested_frame < 0 else min(
+        frames,
+        key=lambda frame: abs(frame - requested_frame),
+    )
+    synchronized = [camera for camera in cameras if int(camera.meta.get("frame", -1)) == target_frame]
+    synchronized = sorted(synchronized, key=lambda camera: int(camera.meta.get("cam", 0)))
+    if not synchronized:
+        return
+
+    gt_row, render_row, depth_row = [], [], []
+    target_size = (270, 480)
+    for camera in synchronized:
+        result = renderer.render(camera, gaussians)
+        gt = camera.original_image[:3].cuda(non_blocking=True)
+        rgb = torch.clamp(result["rgb"], 0.0, 1.0)
+        depth_colored, _ = visualize_depth_numpy(result["depth"].detach().cpu().numpy().squeeze(0))
+        depth = torch.from_numpy(depth_colored[..., [2, 1, 0]] / 255.0).permute(2, 0, 1).float().cuda()
+        gt_row.append(F.interpolate(gt[None], size=target_size, mode="bilinear", align_corners=False)[0])
+        render_row.append(F.interpolate(rgb[None], size=target_size, mode="bilinear", align_corners=False)[0])
+        depth_row.append(F.interpolate(depth[None], size=target_size, mode="nearest")[0])
+
+    panel = torch.cat(
+        [torch.cat(gt_row, dim=2), torch.cat(render_row, dim=2), torch.cat(depth_row, dim=2)],
+        dim=1,
+    )
+    output_dir = os.path.join(cfg.model_path, "log_images_multicam")
+    os.makedirs(output_dir, exist_ok=True)
+    save_img_torch(torch.clamp(panel, 0.0, 1.0), os.path.join(output_dir, f"{iteration}.jpg"))
 
 
 def render_trajectory_videos(scene: Scene, gaussians: StreetGaussianModel, renderer: StreetGaussianRenderer, iteration: int):
@@ -292,6 +336,9 @@ def training():
             # Optimizer step
             if iteration < training_args.iterations:
                 gaussians.update_optimizer()
+
+            if iteration % int(cfg.render.get("multicam_log_interval", 1000)) == 0:
+                save_multicam_training_image(scene, gaussians, gaussians_renderer, iteration)
 
             save_ckpt = iteration in training_args.checkpoint_iterations
             if getattr(training_args, 'checkpoint_interval', 0) and iteration > 0:
