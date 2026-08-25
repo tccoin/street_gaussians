@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <iostream>
 #include <vector>
+#include <cstdint>
 #include "rasterizer.h"
 #include <cuda_runtime_api.h>
 
