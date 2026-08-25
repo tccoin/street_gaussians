@@ -800,6 +800,118 @@ def padding_tracklets(tracklets, frame_timestamps, min_timestamp, max_timestamp)
         tracklets = np.concatenate([tracklets, tracklets_last[None]], axis=0)
 
     return tracklets, frame_timestamps
+    
+# ----------------------------------------------------------------------------------
+# frame/camera metadata cache
+#
+# gs_world's SG render backend (gs_world/simulation/sg_render_backend.py,
+# _load_waymo_scene_info_light) and scripts/convert_sg_frame_camera_info.py both import
+# these three helpers, but they were never present in this submodule -- the closed-loop
+# path cannot start without them. They serialize exactly the keys those consumers read,
+# so a trained scene can be driven in sim without re-reading the processed dataset
+# (no images, no LiDAR, no track files at sim time).
+# ----------------------------------------------------------------------------------
+FRAME_CAMERA_INFO_FILENAME = 'frame_camera_info.npz'
+
+# plain numeric arrays
+_FCI_ARRAY_KEYS = (
+    'exts', 'ixts', 'poses', 'c2ws',
+    'frames', 'cams', 'frames_idx',
+    'cams_timestamps', 'tracklet_timestamps',
+    'obj_tracklets',
+)
+# python containers that have to round-trip through a 0-d object array
+_FCI_OBJECT_KEYS = ('obj_info', 'image_sizes')
+
+
+def frame_camera_info_path(model_path):
+    return os.path.join(str(model_path), FRAME_CAMERA_INFO_FILENAME)
+
+
+def save_frame_camera_info(output, model_path, source_path=None,
+                           selected_frames=None, cameras=None):
+    """Write the frame/camera metadata of `generate_dataparser_outputs` to the model dir.
+
+    Returns the path written.
+    """
+    path = frame_camera_info_path(model_path)
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+
+    payload = {}
+    for key in _FCI_ARRAY_KEYS:
+        if key not in output:
+            raise KeyError(f'dataparser output is missing {key!r}, cannot build {path}')
+        payload[key] = np.asarray(output[key])
+
+    payload['num_frames'] = np.int64(int(output['num_frames']))
+    # str_ so the consumer's .astype(str) round-trips on every numpy version
+    payload['image_filenames'] = np.asarray([str(f) for f in output['image_filenames']],
+                                            dtype=np.str_)
+
+    # Resolve image sizes here rather than leaving the consumer to guess them from
+    # cx*2 / cy*2, which is only right when the principal point is centred (Waymo's
+    # is not).
+    cams_used = sorted({int(c) for c in np.asarray(output['cams']).reshape(-1)})
+    if cameras is not None:
+        cams_used = sorted({int(c) for c in cameras} | set(cams_used))
+    image_sizes = {}
+    for cam_id in cams_used:
+        if cam_id < len(image_heights) and cam_id < len(image_widths):
+            image_sizes[cam_id] = (int(image_heights[cam_id]), int(image_widths[cam_id]))
+    payload['image_sizes'] = np.array(image_sizes, dtype=object)
+    payload['obj_info'] = np.array(output['obj_info'], dtype=object)
+
+    payload['source_path'] = np.asarray(str(source_path or output.get('source_path', '')))
+    payload['selected_frames'] = np.asarray(
+        [] if selected_frames is None else [int(v) for v in selected_frames], dtype=np.int64)
+    payload['cameras'] = np.asarray(
+        [] if cameras is None else [int(v) for v in cameras], dtype=np.int64)
+
+    np.savez_compressed(path, **payload)
+    print(f'Saved frame/camera info cache to {path}')
+    return path
+
+
+def load_frame_camera_info(model_path):
+    """Inverse of save_frame_camera_info. Returns a plain dict (the consumer calls
+    .get()/.setdefault() on it, so an NpzFile will not do)."""
+    path = frame_camera_info_path(model_path)
+    out = {}
+    with np.load(path, allow_pickle=True) as data:
+        for key in _FCI_ARRAY_KEYS:
+            out[key] = data[key]
+        out['num_frames'] = int(data['num_frames'])
+        out['image_filenames'] = [str(f) for f in data['image_filenames']]
+        for key in _FCI_OBJECT_KEYS:
+            if key in data:
+                out[key] = data[key].item()
+        if 'source_path' in data:
+            out['source_path'] = str(data['source_path'])
+        for key in ('selected_frames', 'cameras'):
+            if key in data:
+                out[key] = [int(v) for v in np.atleast_1d(data[key])]
+    return out
+
+
+def _maybe_override_image_sizes(datadir):
+    """Per-camera image sizes are hardcoded to the Waymo rig above, and they set the shape of the
+    obj_bound arrays. A non-Waymo rig (e.g. the PD P4H capture at 960x540) must declare its own.
+    If <datadir>/image_sizes.json is absent this is a no-op, so Waymo scenes are untouched."""
+    global image_heights, image_widths
+    path = os.path.join(datadir, 'image_sizes.json')
+    if not os.path.exists(path):
+        return
+    with open(path, 'r') as f:
+        decl = json.load(f)                       # {"<cam_id>": [height, width], ...}
+    n = max(len(image_heights), max(int(k) for k in decl) + 1)
+    hs = list(image_heights) + [image_heights[-1]] * (n - len(image_heights))
+    ws = list(image_widths) + [image_widths[-1]] * (n - len(image_widths))
+    for k, hw in decl.items():
+        hs[int(k)], ws[int(k)] = int(hw[0]), int(hw[1])
+    image_heights, image_widths = hs, ws
+    print(f'image sizes overridden from {path}: ' +
+          ', '.join(f'cam{i}={ws[i]}x{hs[i]}' for i in sorted(int(k) for k in decl)))
+
 
 def generate_dataparser_outputs(
         datadir,
@@ -808,6 +920,7 @@ def generate_dataparser_outputs(
         cameras=[0, 1, 2, 3, 4]
     ):
 
+    _maybe_override_image_sizes(datadir)
     image_dir = os.path.join(datadir, 'images')
     image_filenames_all = sorted(
         glob(os.path.join(image_dir, '*.png')) + glob(os.path.join(image_dir, '*.jpg'))

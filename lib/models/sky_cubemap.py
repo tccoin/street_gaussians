@@ -4,7 +4,18 @@ import numpy as np
 import imageio
 import os
 import cv2
-import nvdiffrast.torch as dr 
+# nvdiffrast is only needed when the sky cubemap is actually used
+# (cfg.model.nsg.include_sky). Import it lazily so a run with the sky model off does not
+# require the package at all -- it is a CUDA/GL extension and not always easy to install.
+class _LazyNvdiffrast:
+    _mod = None
+    def __getattr__(self, name):
+        if _LazyNvdiffrast._mod is None:
+            import nvdiffrast.torch as _dr
+            _LazyNvdiffrast._mod = _dr
+        return getattr(_LazyNvdiffrast._mod, name)
+
+dr = _LazyNvdiffrast()
 from lib.config import cfg
 from lib.utils.camera_utils import Camera
 from lib.utils.graphics_utils import get_rays_torch
